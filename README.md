@@ -19,7 +19,9 @@ Head to the [Releases](../../releases) page to download the latest APK.
 - **MOT, Tax & Insurance** — Track all three expiry dates with colour-coded status badges
 - **Calendar view** — See all upcoming events on a monthly calendar with colour-coded dots
 - **Quick Check** — Look up any registration plate without saving it, just like totalcarcheck.com
-- **Ask Mike** — Built-in AI mechanic powered by Google Gemini. Ask anything about your car
+- **Service History** — Manually log services, oil changes, tyre replacements and repairs per vehicle with cost tracking
+- **MOT History** — Full DVSA test history per vehicle: pass/fail, odometer readings, advisories and failure reasons
+- **Ask Mike** — Built-in AI mechanic powered by Google Gemini. Automatically aware of your saved vehicles for personalised advice
 - **Fully offline storage** — All your vehicle data is stored locally on your device using SQLite
 
 ---
@@ -50,6 +52,7 @@ Head to the [Releases](../../releases) page to download the latest APK.
 - [Expo CLI](https://docs.expo.dev/get-started/installation/)
 - A free [DVLA API key](https://developer-portal.driver-vehicle-licensing.api.gov.uk)
 - A free [Google AI Studio key](https://aistudio.google.com/app/apikey) (Gemini)
+- A free [DVSA MOT History API key](https://developer.mot.api.gov.uk) (optional — for MOT history feature)
 
 ### Installation
 
@@ -66,6 +69,7 @@ Create a `.env` file in the root directory:
 ```env
 DVLA_API_KEY=your_dvla_key_here
 GEMINI_API_KEY=your_gemini_key_here
+# MOT_HISTORY_API_KEY is entered in-app via Settings, not baked into the build
 ```
 
 ### Run
@@ -88,8 +92,9 @@ eas build -p android --profile preview
 
 - [ ] Play Store release
 - [ ] Home screen widget
-- [ ] Service history log per vehicle
 - [ ] Mileage tracker
+- [ ] Parking & toll permit reminders (Dartford, M6 etc.)
+- [ ] Lorry driver mode — tachograph inspection, 6-week/3-month/6-month periodic checks
 - [ ] Share vehicles with family/partner
 
 ---

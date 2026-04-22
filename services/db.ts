@@ -31,6 +31,17 @@ export type Reminder = {
   days_before: number;
 };
 
+export type ServiceRecord = {
+  id: number;
+  vehicle_id: number;
+  service_date: string;
+  mileage: number | null;
+  service_type: string;
+  cost: number | null;
+  notes: string | null;
+  created_at: string;
+};
+
 export function initDatabase() {
   db.execSync(`
     CREATE TABLE IF NOT EXISTS vehicles (
@@ -62,7 +73,48 @@ export function initDatabase() {
       days_before INTEGER NOT NULL DEFAULT 30,
       FOREIGN KEY (vehicle_id) REFERENCES vehicles(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS service_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      vehicle_id INTEGER NOT NULL,
+      service_date TEXT NOT NULL,
+      mileage INTEGER,
+      service_type TEXT NOT NULL,
+      cost REAL,
+      notes TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (vehicle_id) REFERENCES vehicles(id) ON DELETE CASCADE
+    );
   `);
+}
+
+// ── Service History ────────────────────────────────────────────────────────────
+
+export function getServiceHistory(vehicleId: number): ServiceRecord[] {
+  return db.getAllSync<ServiceRecord>(
+    'SELECT * FROM service_history WHERE vehicle_id = ? ORDER BY service_date DESC',
+    [vehicleId]
+  );
+}
+
+export function insertServiceRecord(r: Omit<ServiceRecord, 'id' | 'created_at'>): number {
+  const now = new Date().toISOString();
+  const result = db.runSync(
+    `INSERT INTO service_history (vehicle_id, service_date, mileage, service_type, cost, notes, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [r.vehicle_id, r.service_date, r.mileage ?? null, r.service_type, r.cost ?? null, r.notes ?? null, now]
+  );
+  return result.lastInsertRowId;
+}
+
+export function updateServiceRecord(id: number, updates: Partial<Omit<ServiceRecord, 'id' | 'vehicle_id' | 'created_at'>>) {
+  const fields = Object.keys(updates).map(k => `${k} = ?`).join(', ');
+  const values = [...Object.values(updates), id];
+  db.runSync(`UPDATE service_history SET ${fields} WHERE id = ?`, values);
+}
+
+export function deleteServiceRecord(id: number) {
+  db.runSync('DELETE FROM service_history WHERE id = ?', [id]);
 }
 
 export function getAllVehicles(): Vehicle[] {

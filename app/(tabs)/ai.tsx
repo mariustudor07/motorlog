@@ -1,12 +1,59 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList,
-  ActivityIndicator, KeyboardAvoidingView, Platform,
+  ScrollView, ActivityIndicator, Keyboard,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { sendChatMessage, ChatMessage } from '../../services/gemini';
+import { getAllVehicles, Vehicle } from '../../services/db';
+import { MIKE_CONTEXT_KEY } from './settings';
 import { Colors } from '../../constants/colors';
+
+// ── Rate limiting ─────────────────────────────────────────────────────────────
+const RATE_KEY = 'mike_rate_limit';
+const RATE_LIMIT = 20;       // max messages
+const RATE_WINDOW = 3600000; // 1 hour in ms
+
+type RateData = { count: number; windowStart: number };
+
+async function checkRateLimit(): Promise<{ allowed: boolean; minutesLeft?: number }> {
+  const raw = await AsyncStorage.getItem(RATE_KEY);
+  const now = Date.now();
+  const data: RateData = raw ? JSON.parse(raw) : { count: 0, windowStart: now };
+
+  // Reset window if an hour has passed
+  if (now - data.windowStart >= RATE_WINDOW) {
+    await AsyncStorage.setItem(RATE_KEY, JSON.stringify({ count: 1, windowStart: now }));
+    return { allowed: true };
+  }
+
+  if (data.count >= RATE_LIMIT) {
+    const msLeft = RATE_WINDOW - (now - data.windowStart);
+    return { allowed: false, minutesLeft: Math.ceil(msLeft / 60000) };
+  }
+
+  await AsyncStorage.setItem(RATE_KEY, JSON.stringify({ ...data, count: data.count + 1 }));
+  return { allowed: true };
+}
+
+function buildVehicleContext(vehicles: Vehicle[]): string {
+  if (vehicles.length === 0) return '';
+  return vehicles.map(v => {
+    const parts = [
+      `${v.registration_number}: ${v.year_of_manufacture ?? ''} ${v.make}`.trim(),
+      v.colour ? `Colour: ${v.colour}` : null,
+      v.fuel_type ? `Fuel: ${v.fuel_type}` : null,
+      v.engine_capacity ? `Engine: ${v.engine_capacity}cc` : null,
+      v.mot_expiry_date ? `MOT expires: ${v.mot_expiry_date}` : 'MOT: not set',
+      v.tax_due_date ? `Tax due: ${v.tax_due_date}` : 'Tax: not set',
+      v.insurance_expiry_date ? `Insurance expires: ${v.insurance_expiry_date}` : null,
+    ].filter(Boolean);
+    return parts.join(', ');
+  }).join('\n');
+}
 
 const SUGGESTIONS = [
   'My engine light just came on — what does it mean?',
@@ -20,11 +67,45 @@ export default function AiScreen() {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [vehicleContext, setVehicleContext] = useState('');
+  const [keyboardOffset, setKeyboardOffset] = useState(0);
   const listRef = useRef<FlatList>(null);
+
+  useEffect(() => {
+    const show = Keyboard.addListener('keyboardDidShow', e => {
+      setKeyboardOffset(e.endCoordinates.height);
+    });
+    const hide = Keyboard.addListener('keyboardDidHide', () => {
+      setKeyboardOffset(0);
+    });
+    return () => { show.remove(); hide.remove(); };
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      const load = async () => {
+        const contextEnabled = await AsyncStorage.getItem(MIKE_CONTEXT_KEY);
+        if (contextEnabled !== 'false') {
+          const vehicles = getAllVehicles();
+          setVehicleContext(buildVehicleContext(vehicles));
+        } else {
+          setVehicleContext('');
+        }
+      };
+      load();
+    }, [])
+  );
 
   const send = async (text: string) => {
     const msg = text.trim();
     if (!msg || loading) return;
+
+    const rate = await checkRateLimit();
+    if (!rate.allowed) {
+      setError(`You've sent ${RATE_LIMIT} messages this hour. Mike needs a breather — try again in ${rate.minutesLeft} minute${rate.minutesLeft === 1 ? '' : 's'}.`);
+      return;
+    }
+
     setInput('');
     setError('');
     const newMessages: ChatMessage[] = [...messages, { role: 'user', text: msg }];
@@ -32,7 +113,7 @@ export default function AiScreen() {
     setLoading(true);
     setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 100);
     try {
-      const reply = await sendChatMessage(messages, msg);
+      const reply = await sendChatMessage(messages, msg, vehicleContext || undefined);
       setMessages([...newMessages, { role: 'model', text: reply }]);
       setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 100);
     } catch (e: any) {
@@ -48,11 +129,19 @@ export default function AiScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       <View style={styles.header}>
-        <View>
+        <View style={{ flex: 1 }}>
           <Text style={styles.title}>Car AI</Text>
-          <Text style={styles.subtitle}>Ask anything about your vehicle</Text>
+          <View style={styles.subtitleRow}>
+            <Text style={styles.subtitle}>Ask anything about your vehicle</Text>
+            {vehicleContext ? (
+              <View style={styles.contextBadge}>
+                <Ionicons name="car-outline" size={10} color={Colors.green} />
+                <Text style={styles.contextBadgeText}>Knows your cars</Text>
+              </View>
+            ) : null}
+          </View>
         </View>
         {messages.length > 0 && (
           <TouchableOpacity onPress={handleClear} style={styles.clearBtn}>
@@ -61,13 +150,14 @@ export default function AiScreen() {
         )}
       </View>
 
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={0}
-      >
+      <View style={{ flex: 1, marginBottom: keyboardOffset }}>
         {messages.length === 0 ? (
-          <View style={styles.emptyState}>
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={styles.emptyState}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
             <Ionicons name="chatbubble-ellipses-outline" size={56} color={Colors.textDim} />
             <Text style={styles.emptyTitle}>Ask Mike</Text>
             <Text style={styles.emptyText}>Your no-nonsense mechanic. Ask about warning lights, MOT, buying a car, or anything else under the bonnet.</Text>
@@ -78,7 +168,7 @@ export default function AiScreen() {
                 </TouchableOpacity>
               ))}
             </View>
-          </View>
+          </ScrollView>
         ) : (
           <FlatList
             ref={listRef}
@@ -118,7 +208,7 @@ export default function AiScreen() {
             <Ionicons name="send" size={18} color={Colors.white} />
           </TouchableOpacity>
         </View>
-      </KeyboardAvoidingView>
+      </View>
     </SafeAreaView>
   );
 }
@@ -164,6 +254,13 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: 28, fontWeight: '800', color: Colors.text },
   subtitle: { fontSize: 13, color: Colors.textMuted, marginTop: 2 },
+  subtitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 },
+  contextBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: Colors.greenDim, borderRadius: 8,
+    paddingHorizontal: 7, paddingVertical: 2,
+  },
+  contextBadgeText: { color: Colors.green, fontSize: 10, fontWeight: '600' },
   clearBtn: {
     padding: 8,
     backgroundColor: Colors.surface,
@@ -171,10 +268,11 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   emptyState: {
-    flex: 1,
+    flexGrow: 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 32,
+    paddingVertical: 32,
     gap: 12,
   },
   emptyTitle: { fontSize: 18, fontWeight: '700', color: Colors.text },
@@ -243,8 +341,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-end',
     gap: 10,
-    padding: 12,
-    paddingBottom: 16,
+    paddingHorizontal: 12,
+    paddingTop: 12,
+    paddingBottom: 12,
     borderTopWidth: 1,
     borderTopColor: Colors.border,
     backgroundColor: Colors.background,

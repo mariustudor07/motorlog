@@ -32,12 +32,20 @@ export type ChatMessage = {
   text: string;
 };
 
-export async function sendChatMessage(history: ChatMessage[], userMessage: string): Promise<string> {
+export async function sendChatMessage(
+  history: ChatMessage[],
+  userMessage: string,
+  vehicleContext?: string
+): Promise<string> {
   const apiKey = await SecureStore.getItemAsync('gemini_api_key');
   if (!apiKey) throw new Error('Gemini API key not set. Go to Settings to add it.');
 
+  const systemWithContext = vehicleContext
+    ? `${SYSTEM_PROMPT}\n\n---\n\nThe user's saved vehicles in Motorlog:\n${vehicleContext}\n\nReference these when relevant — e.g. if they ask about warning lights or servicing, tie it back to their specific make, model, fuel type, and MOT status.`
+    : SYSTEM_PROMPT;
+
   const contents = [
-    { role: 'user', parts: [{ text: SYSTEM_PROMPT }] },
+    { role: 'user', parts: [{ text: systemWithContext }] },
     { role: 'model', parts: [{ text: 'Alright, I\'m Mike — been under more bonnets than I care to count. What\'s the problem?' }] },
     ...history.map(m => ({ role: m.role, parts: [{ text: m.text }] })),
     { role: 'user', parts: [{ text: userMessage }] },

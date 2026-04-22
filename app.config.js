@@ -60,6 +60,7 @@ module.exports = {
     extra: {
       dvlaApiKey: process.env.DVLA_API_KEY ?? '',
       geminiApiKey: process.env.GEMINI_API_KEY ?? '',
+      motHistoryApiKey: process.env.MOT_HISTORY_API_KEY ?? '',
       eas: {
         projectId: 'ade4223c-fbfa-47c0-a3c2-a64d1149ec7e',
       },

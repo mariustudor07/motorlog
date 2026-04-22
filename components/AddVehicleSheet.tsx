@@ -244,7 +244,7 @@ export const AddVehicleSheet = forwardRef<AddVehicleSheetRef, Props>(({ onVehicl
                       value={plate}
                       onChangeText={t => setPlate(t.toUpperCase())}
                       autoCapitalize="characters"
-                      maxLength={8}
+                      maxLength={10}
                     />
                   </View>
                   <TouchableOpacity
@@ -296,7 +296,7 @@ export const AddVehicleSheet = forwardRef<AddVehicleSheetRef, Props>(({ onVehicl
                   onChangeText={v => setField('registration_number', v.toUpperCase().replace(/\s+/g, ''))}
                   placeholder="AB12CDE"
                   mono
-                  maxLength={8}
+                  maxLength={10}
                   autoCapitalize="characters"
                 />
                 <ManualField

@@ -143,6 +143,26 @@ export default function VehicleDetailScreen() {
           />
         )}
 
+        <Text style={styles.sectionTitle}>History & Records</Text>
+        <View style={styles.actionsRow}>
+          <TouchableOpacity
+            style={styles.actionCard}
+            onPress={() => router.push(`/vehicle/service-history/${vehicle.id}`)}
+          >
+            <Ionicons name="construct-outline" size={22} color={Colors.primary} />
+            <Text style={styles.actionLabel}>Service History</Text>
+            <Text style={styles.actionSub}>Log services, tyres & repairs</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.actionCard}
+            onPress={() => router.push(`/vehicle/mot-history/${vehicle.id}`)}
+          >
+            <Ionicons name="document-text-outline" size={22} color={Colors.primary} />
+            <Text style={styles.actionLabel}>MOT History</Text>
+            <Text style={styles.actionSub}>View past tests & advisories</Text>
+          </TouchableOpacity>
+        </View>
+
         <Text style={styles.sectionTitle}>DVLA Details</Text>
         <InfoGrid vehicle={vehicle} />
       </ScrollView>
@@ -228,6 +248,32 @@ const styles = StyleSheet.create({
   dateLabel: { color: Colors.text, fontSize: 14, fontWeight: '500' },
   dateRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   dateValue: { color: Colors.textMuted, fontSize: 13 },
+  actionsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 20,
+  },
+  actionCard: {
+    flex: 1,
+    backgroundColor: Colors.surface,
+    borderRadius: 12,
+    padding: 14,
+    alignItems: 'flex-start',
+    gap: 4,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  actionLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.text,
+    marginTop: 4,
+  },
+  actionSub: {
+    fontSize: 11,
+    color: Colors.textDim,
+    lineHeight: 15,
+  },
   grid: {
     backgroundColor: Colors.surface,
     borderRadius: 14,

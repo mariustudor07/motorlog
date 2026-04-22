@@ -11,7 +11,7 @@ import { Colors } from '../constants/colors';
 
 /** Seed default API keys from .env on first launch — won't overwrite if user has already saved their own */
 async function seedDefaultKeys() {
-  const { dvlaApiKey, geminiApiKey } = Constants.expoConfig?.extra ?? {};
+  const { dvlaApiKey, geminiApiKey, motHistoryApiKey } = Constants.expoConfig?.extra ?? {};
 
   if (dvlaApiKey) {
     const existing = await getApiKey(Keys.DVLA_API_KEY);
@@ -21,6 +21,11 @@ async function seedDefaultKeys() {
   if (geminiApiKey) {
     const existing = await getApiKey(Keys.GEMINI_API_KEY);
     if (!existing) await setApiKey(Keys.GEMINI_API_KEY, geminiApiKey);
+  }
+
+  if (motHistoryApiKey) {
+    const existing = await getApiKey(Keys.MOT_HISTORY_API_KEY);
+    if (!existing) await setApiKey(Keys.MOT_HISTORY_API_KEY, motHistoryApiKey);
   }
 }
 

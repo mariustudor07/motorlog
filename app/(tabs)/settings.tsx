@@ -1,104 +1,38 @@
 import { useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TextInput, TouchableOpacity,
-  ScrollView, Alert, ActivityIndicator,
+  ScrollView, Alert, Switch,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { getApiKey, setApiKey, clearApiKey, Keys } from '../../services/storage';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { loadThresholds, saveThresholds, getDefaults, Thresholds } from '../../services/thresholds';
 import { Colors } from '../../constants/colors';
 
-type KeyEntry = {
-  key: string;
-  label: string;
-  placeholder: string;
-  helpText: string;
-  icon: React.ComponentProps<typeof Ionicons>['name'];
-};
-
-const API_KEYS: KeyEntry[] = [
-  {
-    key: Keys.DVLA_API_KEY,
-    label: 'DVLA API Key',
-    placeholder: 'Paste your DVLA VES API key',
-    helpText: 'Get a free key from the DVLA Developer Portal',
-    icon: 'car-outline',
-  },
-  {
-    key: Keys.GEMINI_API_KEY,
-    label: 'Gemini API Key',
-    placeholder: 'Paste your Google AI Studio key',
-    helpText: 'Get a free key from Google AI Studio',
-    icon: 'sparkles-outline',
-  },
-];
+export const MIKE_CONTEXT_KEY = 'mike_vehicle_context';
 
 export default function SettingsScreen() {
-  // API keys state
-  const [values, setValues] = useState<Record<string, string>>({});
-  const [saved, setSaved] = useState<Record<string, boolean>>({});
-  const [visible, setVisible] = useState<Record<string, boolean>>({});
-  const [saving, setSaving] = useState<Record<string, boolean>>({});
-
-  // Threshold state
   const [thresholds, setThresholds] = useState<Thresholds>(getDefaults());
   const [thresholdSaved, setThresholdSaved] = useState(false);
+  const [mikeContext, setMikeContext] = useState(true);
 
   useFocusEffect(
     useCallback(() => {
       const load = async () => {
-        // Load API keys
-        const loaded: Record<string, string> = {};
-        const savedStatus: Record<string, boolean> = {};
-        for (const entry of API_KEYS) {
-          const val = await getApiKey(entry.key);
-          loaded[entry.key] = val ?? '';
-          savedStatus[entry.key] = !!val;
-        }
-        setValues(loaded);
-        setSaved(savedStatus);
-        // Load thresholds
         const t = await loadThresholds();
         setThresholds(t);
+        const stored = await AsyncStorage.getItem(MIKE_CONTEXT_KEY);
+        // Default true — only false if explicitly set to 'false'
+        setMikeContext(stored !== 'false');
       };
       load();
     }, [])
   );
 
-  // ── API key handlers ───────────────────────────────────────────────────────
-
-  const handleSaveKey = async (entry: KeyEntry) => {
-    const val = values[entry.key]?.trim();
-    if (!val) { Alert.alert('Empty Key', 'Please paste your API key before saving.'); return; }
-    setSaving(s => ({ ...s, [entry.key]: true }));
-    try {
-      await setApiKey(entry.key, val);
-      setSaved(s => ({ ...s, [entry.key]: true }));
-    } catch {
-      Alert.alert('Error', 'Failed to save API key. Please try again.');
-    } finally {
-      setSaving(s => ({ ...s, [entry.key]: false }));
-    }
-  };
-
-  const handleClearKey = (entry: KeyEntry) => {
-    Alert.alert(
-      `Remove ${entry.label}`,
-      'This will remove the key. Features using it will stop working.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Remove', style: 'destructive',
-          onPress: async () => {
-            await clearApiKey(entry.key);
-            setValues(v => ({ ...v, [entry.key]: '' }));
-            setSaved(s => ({ ...s, [entry.key]: false }));
-          },
-        },
-      ]
-    );
+  const handleMikeContextToggle = async (value: boolean) => {
+    setMikeContext(value);
+    await AsyncStorage.setItem(MIKE_CONTEXT_KEY, value ? 'true' : 'false');
   };
 
   // ── Threshold handlers ─────────────────────────────────────────────────────
@@ -140,7 +74,7 @@ export default function SettingsScreen() {
     <SafeAreaView style={styles.safe}>
       <View style={styles.header}>
         <Text style={styles.title}>Settings</Text>
-        <Text style={styles.subtitle}>API keys & notification thresholds</Text>
+        <Text style={styles.subtitle}>Notification thresholds</Text>
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
@@ -203,66 +137,32 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        {/* ── API Keys ─────────────────────────────────────────────────── */}
-        <Text style={[styles.sectionTitle, { marginTop: 8 }]}>API Keys</Text>
+        {/* ── Ask Mike ─────────────────────────────────────────────────── */}
+        <Text style={[styles.sectionTitle, { marginTop: 8 }]}>Ask Mike</Text>
         <Text style={styles.sectionNote}>
-          Keys are stored securely on your device. Never sent anywhere except the respective APIs.
+          Controls what Mike knows when you chat with him.
         </Text>
-
-        {API_KEYS.map(entry => (
-          <View key={entry.key} style={styles.keyCard}>
-            <View style={styles.keyHeader}>
-              <Ionicons name={entry.icon} size={18} color={Colors.primary} />
-              <Text style={styles.keyLabel}>{entry.label}</Text>
-              {saved[entry.key] && (
-                <View style={styles.savedBadge}>
-                  <Ionicons name="checkmark-circle" size={14} color={Colors.green} />
-                  <Text style={styles.savedText}>Saved</Text>
-                </View>
-              )}
-            </View>
-            <View style={styles.inputWrap}>
-              <TextInput
-                style={styles.input}
-                placeholder={entry.placeholder}
-                placeholderTextColor={Colors.textDim}
-                value={values[entry.key] ?? ''}
-                onChangeText={v => setValues(prev => ({ ...prev, [entry.key]: v }))}
-                secureTextEntry={!visible[entry.key]}
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-              <TouchableOpacity
-                onPress={() => setVisible(v => ({ ...v, [entry.key]: !v[entry.key] }))}
-                style={styles.eyeBtn}
-              >
-                <Ionicons name={visible[entry.key] ? 'eye-off-outline' : 'eye-outline'} size={18} color={Colors.textDim} />
-              </TouchableOpacity>
-            </View>
-            <Text style={styles.helpText}>{entry.helpText}</Text>
-            <View style={styles.btnRow}>
-              <TouchableOpacity
-                style={[styles.saveBtn, saving[entry.key] && styles.saveBtnDisabled]}
-                onPress={() => handleSaveKey(entry)}
-                disabled={saving[entry.key]}
-              >
-                {saving[entry.key]
-                  ? <ActivityIndicator size="small" color={Colors.white} />
-                  : <Text style={styles.saveBtnText}>Save</Text>
-                }
-              </TouchableOpacity>
-              {saved[entry.key] && (
-                <TouchableOpacity style={styles.clearBtn} onPress={() => handleClearKey(entry)}>
-                  <Text style={styles.clearBtnText}>Remove</Text>
-                </TouchableOpacity>
-              )}
+        <View style={styles.toggleCard}>
+          <View style={styles.toggleLeft}>
+            <Ionicons name="car-outline" size={18} color={Colors.primary} style={{ marginTop: 1 }} />
+            <View style={styles.toggleText}>
+              <Text style={styles.toggleLabel}>Share my saved vehicles</Text>
+              <Text style={styles.toggleDesc}>
+                Mike will know your reg, make, fuel type and expiry dates — so his advice is specific to your car. Your vehicle details are sent to Google when you chat.
+              </Text>
             </View>
           </View>
-        ))}
+          <Switch
+            value={mikeContext}
+            onValueChange={handleMikeContextToggle}
+            trackColor={{ false: Colors.border, true: Colors.primary }}
+            thumbColor={Colors.white}
+          />
+        </View>
 
         <View style={styles.aboutCard}>
           <Text style={styles.aboutTitle}>About</Text>
-          <Text style={styles.aboutText}>Motorlog v1.0{'\n'}Vehicle data from DVLA VES API{'\n'}AI powered by Google Gemini</Text>
+          <Text style={styles.aboutText}>Motorlog v1.0{'\n'}Vehicle data from DVLA VES API{'\n'}MOT history from DVSA MOT History API{'\n'}AI powered by Google Gemini</Text>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -365,38 +265,16 @@ const styles = StyleSheet.create({
   saveThresholdBtnText: { color: Colors.white, fontWeight: '600', fontSize: 13 },
   saveThresholdBtnSavedText: { color: Colors.green, fontWeight: '600', fontSize: 13 },
 
-  // API key card
-  keyCard: { backgroundColor: Colors.surface, borderRadius: 14, padding: 16, marginBottom: 14 },
-  keyHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
-  keyLabel: { fontSize: 15, fontWeight: '600', color: Colors.text, flex: 1 },
-  savedBadge: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    backgroundColor: Colors.greenDim, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3,
+  toggleCard: {
+    backgroundColor: Colors.surface, borderRadius: 14, padding: 16,
+    marginBottom: 20, flexDirection: 'row', alignItems: 'flex-start',
+    justifyContent: 'space-between', gap: 12,
   },
-  savedText: { color: Colors.green, fontSize: 12, fontWeight: '600' },
-  inputWrap: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: Colors.surfaceAlt, borderRadius: 10,
-    borderWidth: 1, borderColor: Colors.border, marginBottom: 8,
-  },
-  input: {
-    flex: 1, color: Colors.text, fontSize: 13,
-    paddingHorizontal: 14, paddingVertical: 12, fontFamily: 'monospace',
-  },
-  eyeBtn: { paddingRight: 14 },
-  helpText: { fontSize: 12, color: Colors.textDim, marginBottom: 12 },
-  btnRow: { flexDirection: 'row', gap: 10 },
-  saveBtn: {
-    backgroundColor: Colors.primary, borderRadius: 10,
-    paddingHorizontal: 20, paddingVertical: 10, alignItems: 'center', minWidth: 80,
-  },
-  saveBtnDisabled: { opacity: 0.5 },
-  saveBtnText: { color: Colors.white, fontWeight: '600', fontSize: 14 },
-  clearBtn: {
-    borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10,
-    borderWidth: 1, borderColor: Colors.redDim,
-  },
-  clearBtnText: { color: Colors.red, fontWeight: '600', fontSize: 14 },
+  toggleLeft: { flex: 1, flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
+  toggleText: { flex: 1 },
+  toggleLabel: { fontSize: 14, fontWeight: '600', color: Colors.text, marginBottom: 4 },
+  toggleDesc: { fontSize: 12, color: Colors.textDim, lineHeight: 17 },
+
   aboutCard: { backgroundColor: Colors.surface, borderRadius: 14, padding: 16, marginTop: 8 },
   aboutTitle: { fontSize: 13, fontWeight: '600', color: Colors.textMuted, marginBottom: 6 },
   aboutText: { fontSize: 13, color: Colors.textDim, lineHeight: 20 },
