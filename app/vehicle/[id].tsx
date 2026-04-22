@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Alert, Platform,
+  Alert, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { getVehicleById, updateVehicle, deleteVehicle, Vehicle } from '../../services/db';
 import { cancelRemindersForVehicle, scheduleRemindersForVehicle } from '../../services/notifications';
+import { lookupVehicle } from '../../services/dvla';
 import { StatusBadge } from '../../components/StatusBadge';
 import { Colors } from '../../constants/colors';
 
@@ -25,6 +26,60 @@ export default function VehicleDetailScreen() {
   const router = useRouter();
   const [vehicle, setVehicle] = useState<Vehicle | null>(null);
   const [showPicker, setShowPicker] = useState<DateField | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshMsg, setRefreshMsg] = useState<{ text: string; ok: boolean } | null>(null);
+
+  const handleRefresh = async () => {
+    if (!vehicle || refreshing) return;
+    setRefreshing(true);
+    setRefreshMsg(null);
+    try {
+      const fresh = await lookupVehicle(vehicle.registration_number);
+      const updates = {
+        make: fresh.make ?? vehicle.make,
+        colour: fresh.colour ?? vehicle.colour,
+        fuel_type: fresh.fuelType ?? vehicle.fuel_type,
+        engine_capacity: fresh.engineCapacity ?? vehicle.engine_capacity,
+        year_of_manufacture: fresh.yearOfManufacture ?? vehicle.year_of_manufacture,
+        co2_emissions: fresh.co2Emissions ?? vehicle.co2_emissions,
+        euro_status: fresh.euroStatus ?? vehicle.euro_status,
+        mot_status: fresh.motStatus ?? vehicle.mot_status,
+        tax_status: fresh.taxStatus ?? vehicle.tax_status,
+        tax_due_date: fresh.taxDueDate ? fresh.taxDueDate.split('T')[0] : vehicle.tax_due_date,
+        raw_dvla_json: JSON.stringify(fresh),
+      };
+      updateVehicle(vehicle.id, updates);
+      const updated = getVehicleById(vehicle.id)!;
+      setVehicle(updated);
+
+      // Reschedule reminders if tax date changed
+      if (fresh.taxDueDate) {
+        await cancelRemindersForVehicle(vehicle.id);
+        const dates: { type: 'mot' | 'tax' | 'insurance'; date: string | null }[] = [
+          { type: 'mot', date: updated.mot_expiry_date },
+          { type: 'tax', date: updated.tax_due_date },
+          { type: 'insurance', date: updated.insurance_expiry_date },
+        ];
+        for (const { type, date } of dates) {
+          if (date) {
+            await scheduleRemindersForVehicle({
+              vehicleId: vehicle.id,
+              registration: vehicle.registration_number,
+              make: vehicle.make,
+              type,
+              dueDate: date,
+            });
+          }
+        }
+      }
+      setRefreshMsg({ text: 'Updated from DVLA ✓', ok: true });
+    } catch (e: any) {
+      setRefreshMsg({ text: e.message ?? 'Refresh failed', ok: false });
+    } finally {
+      setRefreshing(false);
+      setTimeout(() => setRefreshMsg(null), 3000);
+    }
+  };
 
   useFocusEffect(
     useCallback(() => {
@@ -97,10 +152,25 @@ export default function VehicleDetailScreen() {
           <Ionicons name="arrow-back" size={22} color={Colors.text} />
         </TouchableOpacity>
         <Text style={styles.reg}>{vehicle.registration_number}</Text>
-        <TouchableOpacity onPress={handleDelete} style={styles.deleteBtn}>
-          <Ionicons name="trash-outline" size={20} color={Colors.red} />
-        </TouchableOpacity>
+        <View style={styles.headerRight}>
+          <TouchableOpacity onPress={handleRefresh} style={styles.refreshBtn} disabled={refreshing}>
+            {refreshing
+              ? <ActivityIndicator size="small" color={Colors.primary} />
+              : <Ionicons name="refresh-outline" size={20} color={Colors.primary} />
+            }
+          </TouchableOpacity>
+          <TouchableOpacity onPress={handleDelete} style={styles.deleteBtn}>
+            <Ionicons name="trash-outline" size={20} color={Colors.red} />
+          </TouchableOpacity>
+        </View>
       </View>
+      {refreshMsg && (
+        <View style={[styles.refreshMsg, refreshMsg.ok ? styles.refreshMsgOk : styles.refreshMsgErr]}>
+          <Text style={[styles.refreshMsgText, { color: refreshMsg.ok ? Colors.green : Colors.red }]}>
+            {refreshMsg.text}
+          </Text>
+        </View>
+      )}
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <View style={styles.makeCard}>
@@ -204,7 +274,19 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   backBtn: { padding: 6 },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  refreshBtn: { padding: 6 },
   deleteBtn: { padding: 6 },
+  refreshMsg: {
+    marginHorizontal: 16,
+    marginBottom: 6,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  refreshMsgOk: { backgroundColor: Colors.greenDim },
+  refreshMsgErr: { backgroundColor: Colors.redDim },
+  refreshMsgText: { fontSize: 13, fontWeight: '500' },
   reg: {
     fontSize: 22,
     fontWeight: '800',
