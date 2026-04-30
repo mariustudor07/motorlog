@@ -6,7 +6,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { getVehicleById, Vehicle } from '../../../services/db';
+import { getVehicleById, Vehicle, getMotHistoryCache, saveMotHistoryCache } from '../../../services/db';
 import { fetchMotHistory, MotHistoryVehicle, MotTest, MotDefect } from '../../../services/motHistory';
 import { Colors } from '../../../constants/colors';
 
@@ -18,27 +18,61 @@ export default function MotHistoryScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expandedTest, setExpandedTest] = useState<string | null>(null);
+  const [cachedAt, setCachedAt] = useState<string | null>(null); // ISO timestamp of last cache
 
   useFocusEffect(
     useCallback(() => {
       const v = getVehicleById(Number(id));
       setVehicle(v);
-      if (v) loadHistory(v.registration_number);
+      if (!v) return;
+
+      // Try loading from cache first — instant, offline-safe
+      const cached = getMotHistoryCache(Number(id));
+      if (cached) {
+        try {
+          setHistory(JSON.parse(cached.data) as MotHistoryVehicle);
+          setCachedAt(cached.fetched_at);
+        } catch {
+          // corrupt cache — fall through to fetch
+        }
+        // Don't auto-refresh if we already have data; user can tap refresh manually
+      } else {
+        // No cache at all — fetch automatically
+        fetchAndCache(v.registration_number, Number(id));
+      }
     }, [id])
   );
 
-  const loadHistory = async (reg: string) => {
+  const fetchAndCache = async (reg: string, vehicleId: number) => {
     setLoading(true);
     setError(null);
-    setHistory(null);
     try {
       const data = await fetchMotHistory(reg);
+      const now = new Date().toISOString();
+      saveMotHistoryCache(vehicleId, JSON.stringify(data));
       setHistory(data);
+      setCachedAt(now);
     } catch (e: any) {
       setError(e.message ?? 'Failed to load MOT history.');
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleRefresh = () => {
+    if (vehicle) fetchAndCache(vehicle.registration_number, Number(id));
+  };
+
+  /** Human-readable "X days ago" / "today" / "X hours ago" */
+  const cacheAge = (iso: string): string => {
+    const diff = Date.now() - new Date(iso).getTime();
+    const mins = Math.floor(diff / 60_000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
   };
 
   const formatDate = (d: string) => {
@@ -62,7 +96,7 @@ export default function MotHistoryScreen() {
           )}
         </View>
         <TouchableOpacity
-          onPress={() => vehicle && loadHistory(vehicle.registration_number)}
+          onPress={handleRefresh}
           style={styles.refreshBtn}
           disabled={loading}
         >
@@ -71,6 +105,17 @@ export default function MotHistoryScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+
+        {/* Cache banner */}
+        {cachedAt && !loading && (
+          <View style={styles.cacheBanner}>
+            <Ionicons name="cloud-done-outline" size={14} color={Colors.textDim} />
+            <Text style={styles.cacheBannerText}>Cached · {cacheAge(cachedAt)}</Text>
+            <TouchableOpacity onPress={handleRefresh} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Text style={styles.cacheBannerRefresh}>Refresh</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         {loading && (
           <View style={styles.centred}>
@@ -91,7 +136,7 @@ export default function MotHistoryScreen() {
             )}
             <TouchableOpacity
               style={styles.retryBtn}
-              onPress={() => vehicle && loadHistory(vehicle.registration_number)}
+              onPress={handleRefresh}
             >
               <Text style={styles.retryBtnText}>Try again</Text>
             </TouchableOpacity>
@@ -267,6 +312,14 @@ const styles = StyleSheet.create({
   refreshBtn: { padding: 6 },
 
   scroll: { padding: 16, paddingTop: 4, paddingBottom: 40 },
+
+  cacheBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: Colors.surface, borderRadius: 8,
+    paddingHorizontal: 12, paddingVertical: 7, marginBottom: 12,
+  },
+  cacheBannerText: { flex: 1, fontSize: 12, color: Colors.textDim },
+  cacheBannerRefresh: { fontSize: 12, color: Colors.primary, fontWeight: '600' },
 
   centred: { alignItems: 'center', paddingTop: 80, gap: 14 },
   loadingText: { color: Colors.textMuted, fontSize: 14 },

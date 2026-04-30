@@ -1,16 +1,18 @@
 import { useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Alert, ActivityIndicator,
+  Alert, ActivityIndicator, TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { getVehicleById, updateVehicle, deleteVehicle, Vehicle } from '../../services/db';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getVehicleById, updateVehicle, deleteVehicle, Vehicle, getVehicleNotes, saveVehicleNotes } from '../../services/db';
 import { cancelRemindersForVehicle, scheduleRemindersForVehicle } from '../../services/notifications';
 import { lookupVehicle } from '../../services/dvla';
 import { StatusBadge } from '../../components/StatusBadge';
+import { LORRY_MODE_KEY } from '../(tabs)/settings';
 import { Colors } from '../../constants/colors';
 
 type DateField = 'mot_expiry_date' | 'tax_due_date' | 'insurance_expiry_date';
@@ -28,6 +30,9 @@ export default function VehicleDetailScreen() {
   const [showPicker, setShowPicker] = useState<DateField | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshMsg, setRefreshMsg] = useState<{ text: string; ok: boolean } | null>(null);
+  const [lorryMode, setLorryMode] = useState(false);
+  const [notes, setNotes] = useState('');
+  const [notesDirty, setNotesDirty] = useState(false);
 
   const handleRefresh = async () => {
     if (!vehicle || refreshing) return;
@@ -85,6 +90,9 @@ export default function VehicleDetailScreen() {
     useCallback(() => {
       const v = getVehicleById(Number(id));
       setVehicle(v);
+      setNotes(getVehicleNotes(Number(id)));
+      setNotesDirty(false);
+      AsyncStorage.getItem(LORRY_MODE_KEY).then(val => setLorryMode(val === 'true'));
     }, [id])
   );
 
@@ -213,6 +221,18 @@ export default function VehicleDetailScreen() {
           />
         )}
 
+        <TouchableOpacity
+          style={styles.actionCardWide}
+          onPress={() => router.push(`/vehicle/checklist/${vehicle.id}`)}
+        >
+          <Ionicons name="checkbox-outline" size={22} color={Colors.primary} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.actionLabel}>Pre-Drive Checklist</Text>
+            <Text style={styles.actionSub}>Run through safety checks before a journey</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={Colors.textDim} />
+        </TouchableOpacity>
+
         <Text style={styles.sectionTitle}>History & Records</Text>
         <View style={styles.actionsRow}>
           <TouchableOpacity
@@ -231,6 +251,103 @@ export default function VehicleDetailScreen() {
             <Text style={styles.actionLabel}>MOT History</Text>
             <Text style={styles.actionSub}>View past tests & advisories</Text>
           </TouchableOpacity>
+        </View>
+        <TouchableOpacity
+          style={styles.actionCardWide}
+          onPress={() => router.push(`/vehicle/mileage/${vehicle.id}`)}
+        >
+          <Ionicons name="speedometer-outline" size={22} color={Colors.primary} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.actionLabel}>Mileage Tracker</Text>
+            <Text style={styles.actionSub}>Log odometer readings & track distance</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={Colors.textDim} />
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.actionCardWide}
+          onPress={() => router.push(`/vehicle/installments/${vehicle.id}`)}
+        >
+          <Ionicons name="card-outline" size={22} color={Colors.primary} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.actionLabel}>Monthly Payments</Text>
+            <Text style={styles.actionSub}>Finance, insurance & recurring costs</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={Colors.textDim} />
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.actionCardWide}
+          onPress={() => router.push(`/vehicle/permits/${vehicle.id}`)}
+        >
+          <Ionicons name="ticket-outline" size={22} color={Colors.primary} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.actionLabel}>Passes & Permits</Text>
+            <Text style={styles.actionSub}>Dart Charge, M6 Toll, parking & more</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={Colors.textDim} />
+        </TouchableOpacity>
+        {lorryMode && (
+          <TouchableOpacity
+            style={styles.actionCardWide}
+            onPress={() => router.push(`/vehicle/hgv/${vehicle.id}`)}
+          >
+            <Ionicons name="bus-outline" size={22} color={Colors.primary} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.actionLabel}>HGV Checks</Text>
+              <Text style={styles.actionSub}>Safety, periodic & tachograph inspections</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={Colors.textDim} />
+          </TouchableOpacity>
+        )}
+
+        {/* Fuel log link — in history section */}
+        <TouchableOpacity
+          style={styles.actionCardWide}
+          onPress={() => router.push(`/vehicle/fuel/${vehicle.id}`)}
+        >
+          <Ionicons name="water-outline" size={22} color={Colors.primary} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.actionLabel}>Fuel Log</Text>
+            <Text style={styles.actionSub}>Track fill-ups, cost & MPG</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={Colors.textDim} />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.actionCardWide}
+          onPress={() => router.push(`/vehicle/export/${vehicle.id}`)}
+        >
+          <Ionicons name="share-outline" size={22} color={Colors.primary} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.actionLabel}>Export Data</Text>
+            <Text style={styles.actionSub}>Download history as CSV files</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={Colors.textDim} />
+        </TouchableOpacity>
+
+        {/* Notes */}
+        <Text style={styles.sectionTitle}>Notes</Text>
+        <View style={styles.notesCard}>
+          <TextInput
+            style={styles.notesInput}
+            placeholder="Anything to remember about this vehicle — upcoming jobs, known issues, reminders to yourself..."
+            placeholderTextColor={Colors.textDim}
+            multiline
+            value={notes}
+            onChangeText={v => { setNotes(v); setNotesDirty(true); }}
+            textAlignVertical="top"
+          />
+          {notesDirty && (
+            <TouchableOpacity
+              style={styles.notesSaveBtn}
+              onPress={() => {
+                saveVehicleNotes(vehicle.id, notes);
+                setNotesDirty(false);
+              }}
+            >
+              <Ionicons name="checkmark" size={14} color={Colors.white} />
+              <Text style={styles.notesSaveBtnText}>Save notes</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         <Text style={styles.sectionTitle}>DVLA Details</Text>
@@ -356,6 +473,17 @@ const styles = StyleSheet.create({
     color: Colors.textDim,
     lineHeight: 15,
   },
+  actionCardWide: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.surface,
+    borderRadius: 12,
+    padding: 14,
+    gap: 12,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
   grid: {
     backgroundColor: Colors.surface,
     borderRadius: 14,
@@ -372,4 +500,20 @@ const styles = StyleSheet.create({
   },
   gridLabel: { color: Colors.textMuted, fontSize: 13 },
   gridValue: { color: Colors.text, fontSize: 13, fontWeight: '500' },
+  notesCard: {
+    backgroundColor: Colors.surface, borderRadius: 12,
+    borderWidth: 1, borderColor: Colors.border,
+    marginBottom: 20, overflow: 'hidden',
+  },
+  notesInput: {
+    color: Colors.text, fontSize: 14, lineHeight: 20,
+    paddingHorizontal: 14, paddingVertical: 12,
+    minHeight: 90,
+  },
+  notesSaveBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    backgroundColor: Colors.primary, margin: 10, marginTop: 0,
+    borderRadius: 8, paddingVertical: 9,
+  },
+  notesSaveBtnText: { color: Colors.white, fontWeight: '600', fontSize: 13 },
 });

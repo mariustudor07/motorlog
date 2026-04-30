@@ -11,21 +11,27 @@ import { Colors } from '../constants/colors';
 
 /** Seed default API keys from .env on first launch — won't overwrite if user has already saved their own */
 async function seedDefaultKeys() {
-  const { dvlaApiKey, geminiApiKey, motHistoryApiKey } = Constants.expoConfig?.extra ?? {};
+  const { dvlaApiKey, geminiApiKey, dvsaClientId, dvsaClientSecret, dvsaApiKey } = Constants.expoConfig?.extra ?? {};
 
   if (dvlaApiKey) {
     const existing = await getApiKey(Keys.DVLA_API_KEY);
     if (!existing) await setApiKey(Keys.DVLA_API_KEY, dvlaApiKey);
   }
-
   if (geminiApiKey) {
     const existing = await getApiKey(Keys.GEMINI_API_KEY);
     if (!existing) await setApiKey(Keys.GEMINI_API_KEY, geminiApiKey);
   }
-
-  if (motHistoryApiKey) {
-    const existing = await getApiKey(Keys.MOT_HISTORY_API_KEY);
-    if (!existing) await setApiKey(Keys.MOT_HISTORY_API_KEY, motHistoryApiKey);
+  if (dvsaClientId) {
+    const existing = await getApiKey(Keys.DVSA_CLIENT_ID);
+    if (!existing) await setApiKey(Keys.DVSA_CLIENT_ID, dvsaClientId);
+  }
+  if (dvsaClientSecret) {
+    const existing = await getApiKey(Keys.DVSA_CLIENT_SECRET);
+    if (!existing) await setApiKey(Keys.DVSA_CLIENT_SECRET, dvsaClientSecret);
+  }
+  if (dvsaApiKey) {
+    const existing = await getApiKey(Keys.DVSA_API_KEY);
+    if (!existing) await setApiKey(Keys.DVSA_API_KEY, dvsaApiKey);
   }
 }
 

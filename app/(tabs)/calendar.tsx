@@ -1,185 +1,273 @@
-import { useState, useCallback } from 'react';
-import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity,
-} from 'react-native';
+import { useCallback } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Calendar, DateData } from 'react-native-calendars';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { getAllReminders } from '../../services/db';
+import { useState } from 'react';
+import {
+  getAllVehicles,
+  getAllPermitsWithVehicle,
+  getAllHgvChecksWithVehicle,
+  getAllInstallmentsWithVehicle,
+} from '../../services/db';
+import { getHgvNextDueDate, getNextPaymentDate } from '../../services/notifications';
 import { Colors } from '../../constants/colors';
 
-type ReminderRow = {
-  id: number;
-  vehicle_id: number;
-  type: string;
-  due_date: string;
-  days_before: number;
-  registration_number: string;
+// ── Unified reminder item ─────────────────────────────────────────────────────
+
+type ReminderItem = {
+  key: string;
+  vehicleId: number;
+  registration: string;
   make: string;
+  label: string;
+  sublabel: string;
+  dueDate: Date;
+  daysLeft: number;
+  category: 'mot' | 'tax' | 'insurance' | 'permit' | 'hgv' | 'payment';
+  route: string;
 };
 
-type MarkedDates = Record<string, {
-  marked?: boolean;
-  dotColor?: string;
-  selected?: boolean;
-  selectedColor?: string;
-}>;
-
-const TYPE_COLORS: Record<string, string> = {
-  mot: Colors.primary,
-  tax: Colors.amber,
+const CATEGORY_COLOR: Record<ReminderItem['category'], string> = {
+  mot:       Colors.primary,
+  tax:       '#FF9500',
   insurance: Colors.green,
+  permit:    '#5AC8FA',
+  hgv:       '#BF5AF2',
+  payment:   '#FF2D55',
 };
 
-const TYPE_LABELS: Record<string, string> = {
-  mot: 'MOT',
-  tax: 'Road Tax',
-  insurance: 'Insurance',
+const CATEGORY_ICON: Record<ReminderItem['category'], string> = {
+  mot:       'document-text-outline',
+  tax:       'receipt-outline',
+  insurance: 'shield-checkmark-outline',
+  permit:    'ticket-outline',
+  hgv:       'bus-outline',
+  payment:   'card-outline',
 };
 
-function formatDisplayDate(dateStr: string) {
-  return new Date(dateStr).toLocaleDateString('en-GB', {
-    weekday: 'short', day: '2-digit', month: 'short', year: 'numeric',
-  });
+function daysUntilDate(d: Date): number {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return Math.ceil((d.getTime() - today.getTime()) / 86400000);
 }
 
-function daysUntil(dateStr: string): number {
-  const now = new Date();
-  now.setHours(0, 0, 0, 0);
-  return Math.ceil((new Date(dateStr).getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+function urgencyColor(days: number): string {
+  if (days < 0) return Colors.red;
+  if (days <= 7) return Colors.red;
+  if (days <= 30) return '#FF9500';
+  return Colors.green;
 }
 
-export default function CalendarScreen() {
-  const [reminders, setReminders] = useState<ReminderRow[]>([]);
-  const [selectedDate, setSelectedDate] = useState('');
+function buildReminders(): ReminderItem[] {
+  const items: ReminderItem[] = [];
+
+  // 1. Vehicle expiry dates
+  const vehicles = getAllVehicles();
+  for (const v of vehicles) {
+    const dateFields: { key: 'mot_expiry_date' | 'tax_due_date' | 'insurance_expiry_date'; cat: ReminderItem['category']; label: string }[] = [
+      { key: 'mot_expiry_date',        cat: 'mot',       label: 'MOT Expiry' },
+      { key: 'tax_due_date',           cat: 'tax',       label: 'Road Tax Due' },
+      { key: 'insurance_expiry_date',  cat: 'insurance', label: 'Insurance Expiry' },
+    ];
+    for (const f of dateFields) {
+      if (!v[f.key]) continue;
+      const due = new Date(v[f.key]!);
+      items.push({
+        key: `vehicle-${v.id}-${f.cat}`,
+        vehicleId: v.id,
+        registration: v.registration_number,
+        make: v.make,
+        label: f.label,
+        sublabel: v.make,
+        dueDate: due,
+        daysLeft: daysUntilDate(due),
+        category: f.cat,
+        route: `/vehicle/${v.id}`,
+      });
+    }
+  }
+
+  // 2. Permits
+  const permits = getAllPermitsWithVehicle();
+  for (const p of permits) {
+    const due = new Date(p.expiry_date);
+    items.push({
+      key: `permit-${p.id}`,
+      vehicleId: p.vehicle_id,
+      registration: p.registration_number,
+      make: p.make,
+      label: p.label,
+      sublabel: 'Permit / Pass',
+      dueDate: due,
+      daysLeft: daysUntilDate(due),
+      category: 'permit',
+      route: `/vehicle/permits/${p.vehicle_id}`,
+    });
+  }
+
+  // 3. HGV checks
+  const hgvChecks = getAllHgvChecksWithVehicle();
+  for (const c of hgvChecks) {
+    const nextDue = getHgvNextDueDate(c);
+    if (!nextDue) continue;
+    items.push({
+      key: `hgv-${c.id}`,
+      vehicleId: c.vehicle_id,
+      registration: c.registration_number,
+      make: c.make,
+      label: c.check_type,
+      sublabel: 'HGV Check',
+      dueDate: nextDue,
+      daysLeft: daysUntilDate(nextDue),
+      category: 'hgv',
+      route: `/vehicle/hgv/${c.vehicle_id}`,
+    });
+  }
+
+  // 4. Monthly payments (next payment date)
+  const installments = getAllInstallmentsWithVehicle();
+  for (const inst of installments) {
+    const nextDate = getNextPaymentDate(inst.payment_day);
+    items.push({
+      key: `payment-${inst.id}`,
+      vehicleId: inst.vehicle_id,
+      registration: inst.registration_number,
+      make: inst.make,
+      label: inst.label,
+      sublabel: inst.amount != null ? `£${inst.amount.toFixed(2)} / month` : 'Monthly payment',
+      dueDate: nextDate,
+      daysLeft: daysUntilDate(nextDate),
+      category: 'payment',
+      route: `/vehicle/installments/${inst.vehicle_id}`,
+    });
+  }
+
+  return items.sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
+}
+
+// ── Main screen ───────────────────────────────────────────────────────────────
+
+export default function RemindersScreen() {
+  const router = useRouter();
+  const [items, setItems] = useState<ReminderItem[]>([]);
 
   useFocusEffect(
     useCallback(() => {
-      const all = getAllReminders() as ReminderRow[];
-      // Keep only the actual due-date reminder (days_before === 1 closest to due)
-      // Show the actual expiry dates, not all reminder notifications
-      const unique = Object.values(
-        all.reduce((acc, r) => {
-          const key = `${r.vehicle_id}-${r.type}`;
-          if (!acc[key] || r.days_before < acc[key].days_before) acc[key] = r;
-          return acc;
-        }, {} as Record<string, ReminderRow>)
-      );
-      setReminders(unique);
+      setItems(buildReminders());
     }, [])
   );
 
-  const markedDates: MarkedDates = {};
-  reminders.forEach(r => {
-    const key = r.due_date;
-    if (!markedDates[key]) markedDates[key] = { marked: true, dotColor: TYPE_COLORS[r.type] ?? Colors.primary };
-  });
-  if (selectedDate) {
-    markedDates[selectedDate] = {
-      ...markedDates[selectedDate],
-      selected: true,
-      selectedColor: Colors.primaryDark,
-    };
-  }
+  const overdue    = items.filter(i => i.daysLeft < 0);
+  const thisWeek   = items.filter(i => i.daysLeft >= 0 && i.daysLeft <= 7);
+  const thisMonth  = items.filter(i => i.daysLeft > 7 && i.daysLeft <= 30);
+  const upcoming   = items.filter(i => i.daysLeft > 30 && i.daysLeft <= 90);
+  const later      = items.filter(i => i.daysLeft > 90);
 
-  const todayEvents = reminders.filter(r => r.due_date === selectedDate);
-  const upcoming = reminders
-    .filter(r => daysUntil(r.due_date) >= 0)
-    .sort((a, b) => a.due_date.localeCompare(b.due_date))
-    .slice(0, 10);
+  const allClear = items.length > 0 && overdue.length === 0 && thisWeek.length === 0;
 
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.header}>
-        <Text style={styles.title}>Calendar</Text>
-        <Text style={styles.subtitle}>Upcoming vehicle events</Text>
+        <Text style={styles.title}>Upcoming</Text>
+        <Text style={styles.subtitle}>All reminders across your vehicles</Text>
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false}>
-        <Calendar
-          onDayPress={(day: DateData) => setSelectedDate(day.dateString)}
-          markedDates={markedDates}
-          theme={{
-            backgroundColor: Colors.background,
-            calendarBackground: Colors.surface,
-            textSectionTitleColor: Colors.textMuted,
-            selectedDayBackgroundColor: Colors.primaryDark,
-            selectedDayTextColor: Colors.white,
-            todayTextColor: Colors.primary,
-            dayTextColor: Colors.text,
-            textDisabledColor: Colors.textDim,
-            dotColor: Colors.primary,
-            selectedDotColor: Colors.white,
-            arrowColor: Colors.primary,
-            monthTextColor: Colors.text,
-            indicatorColor: Colors.primary,
-            textDayFontWeight: '500',
-            textMonthFontWeight: '700',
-            textDayHeaderFontWeight: '600',
-          }}
-          style={styles.calendar}
-        />
-
-        <View style={styles.legendRow}>
-          {Object.entries(TYPE_LABELS).map(([type, label]) => (
-            <View key={type} style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: TYPE_COLORS[type] }]} />
-              <Text style={styles.legendText}>{label}</Text>
-            </View>
-          ))}
-        </View>
-
-        {selectedDate && todayEvents.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>{formatDisplayDate(selectedDate)}</Text>
-            {todayEvents.map(r => (
-              <EventCard key={r.id} reminder={r} />
-            ))}
+      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+        {items.length === 0 ? (
+          <View style={styles.empty}>
+            <Ionicons name="checkmark-circle-outline" size={52} color={Colors.textDim} />
+            <Text style={styles.emptyTitle}>Nothing to track yet</Text>
+            <Text style={styles.emptyText}>Add a vehicle and set its MOT, tax and insurance dates to see reminders here.</Text>
           </View>
-        )}
+        ) : (
+          <>
+            {allClear && (
+              <View style={styles.allClearBanner}>
+                <Ionicons name="checkmark-circle" size={18} color={Colors.green} />
+                <Text style={styles.allClearText}>Everything's up to date — nothing overdue or due this week</Text>
+              </View>
+            )}
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Upcoming</Text>
-          {upcoming.length === 0 ? (
-            <Text style={styles.noEvents}>No upcoming events. Add vehicles to see reminders.</Text>
-          ) : (
-            upcoming.map(r => <EventCard key={r.id} reminder={r} />)
-          )}
-        </View>
+            {overdue.length > 0 && (
+              <Section title="Overdue" color={Colors.red} items={overdue} router={router} />
+            )}
+            {thisWeek.length > 0 && (
+              <Section title="This Week" color={Colors.red} items={thisWeek} router={router} />
+            )}
+            {thisMonth.length > 0 && (
+              <Section title="This Month" color='#FF9500' items={thisMonth} router={router} />
+            )}
+            {upcoming.length > 0 && (
+              <Section title="Next 3 Months" color={Colors.textMuted} items={upcoming} router={router} />
+            )}
+            {later.length > 0 && (
+              <Section title="Later" color={Colors.textDim} items={later} router={router} />
+            )}
+          </>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
 }
 
-function EventCard({ reminder: r }: { reminder: ReminderRow }) {
-  const days = daysUntil(r.due_date);
-  const isOverdue = days < 0;
-  const isUrgent = days <= 7;
-  const dotColor = TYPE_COLORS[r.type] ?? Colors.primary;
+// ── Section ───────────────────────────────────────────────────────────────────
 
+function Section({ title, color, items, router }: {
+  title: string;
+  color: string;
+  items: ReminderItem[];
+  router: ReturnType<typeof useRouter>;
+}) {
   return (
-    <View style={styles.eventCard}>
-      <View style={[styles.eventDot, { backgroundColor: dotColor }]} />
-      <View style={styles.eventContent}>
-        <Text style={styles.eventTitle}>{r.registration_number} — {TYPE_LABELS[r.type] ?? r.type}</Text>
-        <Text style={styles.eventMake}>{r.make}</Text>
-        <Text style={styles.eventDate}>{formatDisplayDate(r.due_date)}</Text>
+    <View style={styles.section}>
+      <View style={styles.sectionHeader}>
+        <View style={[styles.sectionDot, { backgroundColor: color }]} />
+        <Text style={[styles.sectionTitle, { color }]}>{title}</Text>
+        <Text style={styles.sectionCount}>{items.length}</Text>
       </View>
-      <View style={[
-        styles.daysChip,
-        isOverdue ? styles.chipOverdue : isUrgent ? styles.chipUrgent : styles.chipOk,
-      ]}>
-        <Text style={[
-          styles.daysText,
-          isOverdue ? { color: Colors.red } : isUrgent ? { color: Colors.amber } : { color: Colors.green },
-        ]}>
-          {isOverdue ? `${Math.abs(days)}d ago` : days === 0 ? 'Today' : `${days}d`}
-        </Text>
-      </View>
+      {items.map(item => (
+        <ReminderCard key={item.key} item={item} onPress={() => router.push(item.route as any)} />
+      ))}
     </View>
   );
 }
+
+// ── Card ──────────────────────────────────────────────────────────────────────
+
+function ReminderCard({ item, onPress }: { item: ReminderItem; onPress: () => void }) {
+  const color = urgencyColor(item.daysLeft);
+  const catColor = CATEGORY_COLOR[item.category];
+  const catIcon = CATEGORY_ICON[item.category];
+
+  const dayLabel = item.daysLeft < 0
+    ? `${Math.abs(item.daysLeft)}d overdue`
+    : item.daysLeft === 0 ? 'Today'
+    : item.daysLeft === 1 ? 'Tomorrow'
+    : `${item.daysLeft} days`;
+
+  const dateStr = item.dueDate.toLocaleDateString('en-GB', {
+    day: '2-digit', month: 'short', year: 'numeric',
+  });
+
+  return (
+    <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.7}>
+      <View style={[styles.catIcon, { backgroundColor: catColor + '22' }]}>
+        <Ionicons name={catIcon as any} size={17} color={catColor} />
+      </View>
+      <View style={styles.cardContent}>
+        <Text style={styles.cardTitle}>{item.label}</Text>
+        <Text style={styles.cardReg}>{item.registration} · {item.sublabel}</Text>
+        <Text style={styles.cardDate}>{dateStr}</Text>
+      </View>
+      <View style={[styles.daysBadge, { backgroundColor: color + '22' }]}>
+        <Text style={[styles.daysText, { color }]}>{dayLabel}</Text>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+// ── Styles ────────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.background },
@@ -190,52 +278,53 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: 28, fontWeight: '800', color: Colors.text },
   subtitle: { fontSize: 13, color: Colors.textMuted, marginTop: 2 },
-  calendar: {
-    marginHorizontal: 16,
-    borderRadius: 14,
-    overflow: 'hidden',
-    marginBottom: 12,
+  scroll: { padding: 16, paddingTop: 8, paddingBottom: 40 },
+
+  empty: { alignItems: 'center', paddingTop: 80, paddingHorizontal: 32, gap: 10 },
+  emptyTitle: { fontSize: 18, fontWeight: '700', color: Colors.text, marginTop: 8 },
+  emptyText: { fontSize: 13, color: Colors.textMuted, textAlign: 'center', lineHeight: 19 },
+
+  allClearBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: Colors.greenDim, borderRadius: 12,
+    padding: 14, marginBottom: 16,
   },
-  legendRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 20,
-    marginBottom: 16,
+  allClearText: { flex: 1, color: Colors.green, fontSize: 13, fontWeight: '500' },
+
+  section: { marginBottom: 20 },
+  sectionHeader: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8,
   },
-  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  legendDot: { width: 8, height: 8, borderRadius: 4 },
-  legendText: { color: Colors.textMuted, fontSize: 12 },
-  section: { paddingHorizontal: 16, marginBottom: 16 },
+  sectionDot: { width: 7, height: 7, borderRadius: 4 },
   sectionTitle: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: Colors.textDim,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    marginBottom: 10,
+    fontSize: 12, fontWeight: '700',
+    textTransform: 'uppercase', letterSpacing: 0.8, flex: 1,
   },
-  noEvents: { color: Colors.textMuted, fontSize: 14, textAlign: 'center', paddingVertical: 20 },
-  eventCard: {
-    flexDirection: 'row',
+  sectionCount: {
+    fontSize: 12, color: Colors.textDim,
+    backgroundColor: Colors.surface, borderRadius: 10,
+    paddingHorizontal: 7, paddingVertical: 2,
+    overflow: 'hidden',
+  },
+
+  card: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: Colors.surface, borderRadius: 12,
+    padding: 14, marginBottom: 8,
+    borderWidth: 1, borderColor: Colors.border,
+  },
+  catIcon: {
+    width: 36, height: 36, borderRadius: 10,
+    justifyContent: 'center', alignItems: 'center',
+    flexShrink: 0,
+  },
+  cardContent: { flex: 1, gap: 2 },
+  cardTitle: { fontSize: 14, fontWeight: '600', color: Colors.text },
+  cardReg: { fontSize: 12, color: Colors.textMuted },
+  cardDate: { fontSize: 11, color: Colors.textDim },
+  daysBadge: {
+    borderRadius: 8, paddingHorizontal: 9, paddingVertical: 5,
     alignItems: 'center',
-    backgroundColor: Colors.surface,
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 8,
-    gap: 12,
   },
-  eventDot: { width: 10, height: 10, borderRadius: 5, flexShrink: 0 },
-  eventContent: { flex: 1 },
-  eventTitle: { color: Colors.text, fontWeight: '600', fontSize: 14 },
-  eventMake: { color: Colors.textMuted, fontSize: 12, marginTop: 2 },
-  eventDate: { color: Colors.textDim, fontSize: 12, marginTop: 2 },
-  daysChip: {
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-  },
-  chipOk: { backgroundColor: Colors.greenDim },
-  chipUrgent: { backgroundColor: Colors.amberDim },
-  chipOverdue: { backgroundColor: Colors.redDim },
   daysText: { fontSize: 12, fontWeight: '700' },
 });

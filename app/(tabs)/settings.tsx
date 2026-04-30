@@ -4,18 +4,21 @@ import {
   ScrollView, Alert, Switch,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { loadThresholds, saveThresholds, getDefaults, Thresholds } from '../../services/thresholds';
 import { Colors } from '../../constants/colors';
 
 export const MIKE_CONTEXT_KEY = 'mike_vehicle_context';
+export const LORRY_MODE_KEY = 'lorry_mode';
 
 export default function SettingsScreen() {
+  const router = useRouter();
   const [thresholds, setThresholds] = useState<Thresholds>(getDefaults());
   const [thresholdSaved, setThresholdSaved] = useState(false);
   const [mikeContext, setMikeContext] = useState(true);
+  const [lorryMode, setLorryMode] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -25,6 +28,8 @@ export default function SettingsScreen() {
         const stored = await AsyncStorage.getItem(MIKE_CONTEXT_KEY);
         // Default true — only false if explicitly set to 'false'
         setMikeContext(stored !== 'false');
+        const lorry = await AsyncStorage.getItem(LORRY_MODE_KEY);
+        setLorryMode(lorry === 'true');
       };
       load();
     }, [])
@@ -33,6 +38,11 @@ export default function SettingsScreen() {
   const handleMikeContextToggle = async (value: boolean) => {
     setMikeContext(value);
     await AsyncStorage.setItem(MIKE_CONTEXT_KEY, value ? 'true' : 'false');
+  };
+
+  const handleLorryModeToggle = async (value: boolean) => {
+    setLorryMode(value);
+    await AsyncStorage.setItem(LORRY_MODE_KEY, value ? 'true' : 'false');
   };
 
   // ── Threshold handlers ─────────────────────────────────────────────────────
@@ -160,9 +170,38 @@ export default function SettingsScreen() {
           />
         </View>
 
+        {/* ── Lorry Driver Mode ─────────────────────────────────────── */}
+        <Text style={[styles.sectionTitle, { marginTop: 8 }]}>Driver Mode</Text>
+        <Text style={styles.sectionNote}>
+          Unlocks HGV-specific checks on each vehicle — tachograph calibration, safety inspections and periodic inspections.
+        </Text>
+        <View style={styles.toggleCard}>
+          <View style={styles.toggleLeft}>
+            <Ionicons name="bus-outline" size={18} color={Colors.primary} style={{ marginTop: 1 }} />
+            <View style={styles.toggleText}>
+              <Text style={styles.toggleLabel}>Lorry Driver Mode</Text>
+              <Text style={styles.toggleDesc}>
+                Adds an HGV Checks section to each vehicle for logging tachograph calibrations, safety inspections and periodic checks.
+              </Text>
+            </View>
+          </View>
+          <Switch
+            value={lorryMode}
+            onValueChange={handleLorryModeToggle}
+            trackColor={{ false: Colors.border, true: Colors.primary }}
+            thumbColor={Colors.white}
+          />
+        </View>
+
         <View style={styles.aboutCard}>
-          <Text style={styles.aboutTitle}>About</Text>
-          <Text style={styles.aboutText}>Motorlog v1.0{'\n'}Vehicle data from DVLA VES API{'\n'}MOT history from DVSA MOT History API{'\n'}AI powered by Google Gemini</Text>
+          <Text style={styles.aboutTitle}>About Motorlog</Text>
+          <Text style={styles.aboutText}>Version 1.0.0{'\n'}Vehicle data · DVLA VES API{'\n'}MOT history · DVSA MOT History API{'\n'}AI assistant · Google Gemini</Text>
+          <View style={styles.aboutDivider} />
+          <TouchableOpacity style={styles.aboutLink} onPress={() => router.push('/privacy')}>
+            <Ionicons name="shield-checkmark-outline" size={15} color={Colors.textMuted} />
+            <Text style={styles.aboutLinkText}>Privacy Policy</Text>
+            <Ionicons name="chevron-forward" size={13} color={Colors.textDim} />
+          </TouchableOpacity>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -278,4 +317,7 @@ const styles = StyleSheet.create({
   aboutCard: { backgroundColor: Colors.surface, borderRadius: 14, padding: 16, marginTop: 8 },
   aboutTitle: { fontSize: 13, fontWeight: '600', color: Colors.textMuted, marginBottom: 6 },
   aboutText: { fontSize: 13, color: Colors.textDim, lineHeight: 20 },
+  aboutDivider: { height: 1, backgroundColor: Colors.border, marginVertical: 12 },
+  aboutLink: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  aboutLinkText: { flex: 1, fontSize: 13, color: Colors.textMuted },
 });

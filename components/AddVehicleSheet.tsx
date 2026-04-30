@@ -7,7 +7,8 @@ import BottomSheet, { BottomSheetScrollView, BottomSheetBackdrop } from '@gorhom
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Ionicons } from '@expo/vector-icons';
 import { lookupVehicle, DvlaVehicle } from '../services/dvla';
-import { insertVehicle } from '../services/db';
+import { insertVehicle, saveMotHistoryCache } from '../services/db';
+import { fetchMotHistory, MotHistoryVehicle } from '../services/motHistory';
 import { scheduleRemindersForVehicle } from '../services/notifications';
 import { Colors } from '../constants/colors';
 
@@ -52,6 +53,10 @@ export const AddVehicleSheet = forwardRef<AddVehicleSheetRef, Props>(({ onVehicl
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [dvlaData, setDvlaData] = useState<DvlaVehicle | null>(null);
+  const [motHistoryData, setMotHistoryData] = useState<MotHistoryVehicle | null>(null);
+  // Track which dates were auto-filled so we can show notes in the UI
+  const [motAutoFilled, setMotAutoFilled] = useState(false);
+  const [taxAutoFilled, setTaxAutoFilled] = useState(false);
 
   // Manual mode
   const [manualMode, setManualMode] = useState(false);
@@ -72,6 +77,9 @@ export const AddVehicleSheet = forwardRef<AddVehicleSheetRef, Props>(({ onVehicl
     setPlate('');
     setError('');
     setDvlaData(null);
+    setMotHistoryData(null);
+    setMotAutoFilled(false);
+    setTaxAutoFilled(false);
     setManualMode(false);
     setManualForm(EMPTY_MANUAL);
     setMotExpiry(null);
@@ -86,10 +94,45 @@ export const AddVehicleSheet = forwardRef<AddVehicleSheetRef, Props>(({ onVehicl
     setLoading(true);
     setError('');
     setDvlaData(null);
+    setMotHistoryData(null);
+    setMotAutoFilled(false);
+    setTaxAutoFilled(false);
     try {
-      const data = await lookupVehicle(plate);
-      setDvlaData(data);
-      if (data.taxDueDate) setTaxDue(new Date(data.taxDueDate));
+      // Run DVLA + MOT History in parallel — MOT history failure is non-fatal
+      const [dvlaResult, motResult] = await Promise.allSettled([
+        lookupVehicle(plate),
+        fetchMotHistory(plate),
+      ]);
+
+      if (dvlaResult.status === 'rejected') throw new Error(dvlaResult.reason?.message ?? 'DVLA lookup failed.');
+      const dvla = dvlaResult.value;
+      setDvlaData(dvla);
+
+      // Pre-fill road tax from DVLA
+      if (dvla.taxDueDate) {
+        setTaxDue(new Date(dvla.taxDueDate));
+        setTaxAutoFilled(true);
+      }
+
+      // Pre-fill MOT expiry from history
+      if (motResult.status === 'fulfilled') {
+        const motHistory = motResult.value;
+        setMotHistoryData(motHistory);
+
+        // Find the most recent PASSED test with a valid expiry date
+        const latestPassed = motHistory.motTests.find(
+          t => t.testResult === 'PASSED' && t.expiryDate
+        );
+        if (latestPassed?.expiryDate) {
+          setMotExpiry(new Date(latestPassed.expiryDate));
+          setMotAutoFilled(true);
+        } else {
+          // MOT exists but no valid expiry (all failed, or expired) — set to today so save doesn't crash
+          setMotExpiry(new Date());
+          setMotAutoFilled(true);
+        }
+      }
+      // If MOT history fetch failed (no DVSA creds, 404, etc.) we just leave the date blank for manual entry
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -159,6 +202,15 @@ export const AddVehicleSheet = forwardRef<AddVehicleSheetRef, Props>(({ onVehicl
         insurance_expiry_date: insuranceExpiry ? insuranceExpiry.toISOString().split('T')[0] : null,
         raw_dvla_json: rawJson,
       });
+
+      // Save MOT history to cache — use already-fetched data if available, otherwise fetch in background
+      if (motHistoryData) {
+        saveMotHistoryCache(id, JSON.stringify(motHistoryData));
+      } else {
+        fetchMotHistory(reg)
+          .then(data => saveMotHistoryCache(id, JSON.stringify(data)))
+          .catch(() => { /* silent — user can refresh on the MOT History screen */ });
+      }
 
       if (motExpiry)
         await scheduleRemindersForVehicle({ vehicleId: id, registration: reg, make, type: 'mot', dueDate: motExpiry.toISOString().split('T')[0] });
@@ -364,13 +416,14 @@ export const AddVehicleSheet = forwardRef<AddVehicleSheetRef, Props>(({ onVehicl
                   icon="shield-checkmark-outline"
                   value={formatDate(motExpiry)}
                   onPress={() => setShowPicker('mot_expiry_date')}
+                  note={(!manualMode && motAutoFilled) ? 'Pre-filled from MOT history' : undefined}
                 />
                 <DateRow
                   label="Road Tax Due"
                   icon="card-outline"
                   value={formatDate(taxDue)}
                   onPress={() => setShowPicker('tax_due_date')}
-                  note={(!manualMode && dvlaData?.taxDueDate) ? 'Pre-filled from DVLA' : undefined}
+                  note={(!manualMode && taxAutoFilled) ? 'Pre-filled from DVLA' : undefined}
                 />
                 <DateRow
                   label="Insurance Expiry"

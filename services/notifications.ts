@@ -1,5 +1,5 @@
 import * as Notifications from 'expo-notifications';
-import { upsertReminder, deleteRemindersForVehicle, getRemindersForVehicle } from './db';
+import { upsertReminder, deleteRemindersForVehicle, getRemindersForVehicle, updateInstallment, Installment, updatePermit, Permit, updateHgvCheck, HgvCheck } from './db';
 import { getThresholds } from './thresholds';
 
 Notifications.setNotificationHandler({
@@ -90,6 +90,71 @@ export async function cancelRemindersForVehicle(vehicleId: number) {
   deleteRemindersForVehicle(vehicleId);
 }
 
+// ── Installment reminders ─────────────────────────────────────────────────────
+
+/** Returns the next date a payment falls on (clamps to last day if month is short) */
+export function getNextPaymentDate(paymentDay: number): Date {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const clampedDate = (year: number, month: number) => {
+    const lastDay = new Date(year, month + 1, 0).getDate();
+    return new Date(year, month, Math.min(paymentDay, lastDay));
+  };
+
+  const thisMonth = clampedDate(today.getFullYear(), today.getMonth());
+  if (thisMonth >= today) return thisMonth;
+
+  const nextMonthDate = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+  return clampedDate(nextMonthDate.getFullYear(), nextMonthDate.getMonth());
+}
+
+export async function scheduleInstallmentReminder(installment: Installment, registration: string, make: string): Promise<string | null> {
+  const hasPermission = await requestNotificationPermissions();
+  if (!hasPermission) return null;
+
+  // Cancel existing notification if any
+  if (installment.notification_id) {
+    await Notifications.cancelScheduledNotificationAsync(installment.notification_id).catch(() => {});
+  }
+
+  const paymentDate = getNextPaymentDate(installment.payment_day);
+  const triggerDate = new Date(paymentDate);
+  triggerDate.setDate(triggerDate.getDate() - 1); // 1 day before
+  triggerDate.setHours(9, 0, 0, 0);
+
+  const now = new Date();
+  if (triggerDate <= now) {
+    // Payment is today or past — schedule for next month
+    const nextMonthDate = new Date(paymentDate.getFullYear(), paymentDate.getMonth() + 1, paymentDate.getDate());
+    nextMonthDate.setDate(nextMonthDate.getDate() - 1);
+    nextMonthDate.setHours(9, 0, 0, 0);
+    if (nextMonthDate <= now) return null;
+    triggerDate.setTime(nextMonthDate.getTime());
+  }
+
+  const amountStr = installment.amount != null ? ` (£${installment.amount.toFixed(2)})` : '';
+  const notifId = await Notifications.scheduleNotificationAsync({
+    content: {
+      title: `💳 Payment Due Tomorrow`,
+      body: `${installment.label}${amountStr} — ${registration} (${make})`,
+      data: { vehicleId: installment.vehicle_id, installmentId: installment.id },
+    },
+    trigger: {
+      type: Notifications.SchedulableTriggerInputTypes.DATE,
+      date: triggerDate,
+    },
+  });
+
+  return notifId;
+}
+
+export async function cancelInstallmentReminder(notificationId: string | null) {
+  if (notificationId) {
+    await Notifications.cancelScheduledNotificationAsync(notificationId).catch(() => {});
+  }
+}
+
 export async function rescheduleAll(vehicles: {
   id: number;
   registration_number: string;
@@ -111,4 +176,80 @@ export async function rescheduleAll(vehicles: {
 
     for (const t of targets) await scheduleRemindersForVehicle(t);
   }
+}
+
+// ── Permit reminders ──────────────────────────────────────────────────────────
+
+export async function schedulePermitReminder(permit: Permit, registration: string): Promise<string | null> {
+  const hasPermission = await requestNotificationPermissions();
+  if (!hasPermission) return null;
+
+  if (permit.notification_id) {
+    await Notifications.cancelScheduledNotificationAsync(permit.notification_id).catch(() => {});
+  }
+
+  const { amberDays } = getThresholds();
+  const expiry = new Date(permit.expiry_date);
+  const triggerDate = new Date(expiry);
+  triggerDate.setDate(triggerDate.getDate() - amberDays);
+  triggerDate.setHours(9, 0, 0, 0);
+
+  if (triggerDate <= new Date()) return null;
+
+  const notifId = await Notifications.scheduleNotificationAsync({
+    content: {
+      title: `🎫 Permit Expiring Soon`,
+      body: `${permit.label} for ${registration} expires on ${expiry.toLocaleDateString('en-GB')}`,
+      data: { vehicleId: permit.vehicle_id, permitId: permit.id },
+    },
+    trigger: {
+      type: Notifications.SchedulableTriggerInputTypes.DATE,
+      date: triggerDate,
+    },
+  });
+
+  return notifId;
+}
+
+// ── HGV check reminders ───────────────────────────────────────────────────────
+
+export function getHgvNextDueDate(check: HgvCheck): Date | null {
+  if (!check.last_done_date) return null;
+  const last = new Date(check.last_done_date);
+  const next = new Date(last);
+  next.setDate(next.getDate() + check.interval_days);
+  return next;
+}
+
+export async function scheduleHgvReminder(check: HgvCheck, registration: string): Promise<string | null> {
+  const hasPermission = await requestNotificationPermissions();
+  if (!hasPermission) return null;
+
+  if (check.notification_id) {
+    await Notifications.cancelScheduledNotificationAsync(check.notification_id).catch(() => {});
+  }
+
+  const nextDue = getHgvNextDueDate(check);
+  if (!nextDue) return null;
+
+  const { amberDays } = getThresholds();
+  const triggerDate = new Date(nextDue);
+  triggerDate.setDate(triggerDate.getDate() - amberDays);
+  triggerDate.setHours(9, 0, 0, 0);
+
+  if (triggerDate <= new Date()) return null;
+
+  const notifId = await Notifications.scheduleNotificationAsync({
+    content: {
+      title: `🚛 HGV Check Due Soon`,
+      body: `${check.check_type} for ${registration} — due ${nextDue.toLocaleDateString('en-GB')}`,
+      data: { vehicleId: check.vehicle_id, checkId: check.id },
+    },
+    trigger: {
+      type: Notifications.SchedulableTriggerInputTypes.DATE,
+      date: triggerDate,
+    },
+  });
+
+  return notifId;
 }
